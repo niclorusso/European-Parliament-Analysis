@@ -1,0 +1,65 @@
+[Full network EP10] Node-level avg incident weight:
+count    300.000000
+mean       0.193061
+std        0.080762
+min        0.034139
+25%        0.121843
+50%        0.185395
+75%        0.258670
+max        0.364984
+Louvain communities: {0: 141, 1: 105, 2: 54}
+Modularity (Louvain): 0.418
+Modularity (Leiden): 0.298
+Leiden partition sizes: {0: 175, 1: 125}
+[Full network EP9] Node-level avg incident weight:
+count    300.000000
+mean       0.184970
+std        0.067947
+min        0.041091
+25%        0.132019
+50%        0.188731
+75%        0.238804
+max        0.318322
+Louvain communities: {0: 125, 3: 47, 1: 30, 2: 98}
+Modularity (Louvain): 0.378
+Modularity (Leiden): 0.273
+Leiden partition sizes: {0: 170, 1: 130}
+[Full network EP8] Node-level avg incident weight:
+count    300.000000
+mean       0.185545
+std        0.071094
+min        0.039437
+25%        0.124579
+50%        0.183179
+75%        0.250802
+max        0.333907
+Louvain communities: {2: 94, 0: 120, 1: 86}
+Modularity (Louvain): 0.408
+Modularity (Leiden): 0.289
+Leiden partition sizes: {1: 123, 0: 177}
+[Full network EP7] Node-level avg incident weight:
+count    300.000000
+mean       0.161084
+std        0.058277
+min        0.035746
+25%        0.116056
+50%        0.166338
+75%        0.204544
+max        0.285809
+Louvain communities: {1: 134, 2: 59, 0: 107}
+Modularity (Louvain): 0.403
+Modularity (Leiden): 0.304
+Leiden partition sizes: {0: 177, 1: 123}
+[Full network EP6] Node-level avg incident weight:
+count    300.000000
+mean       0.163077
+std        0.056298
+min        0.032384
+25%        0.125544
+50%        0.162569
+75%        0.201068
+max        0.310059
+Louvain communities: {0: 80, 2: 111, 1: 109}
+Modularity (Louvain): 0.405
+Modularity (Leiden): 0.295
+Leiden partition sizes: {0: 180, 1: 120}
