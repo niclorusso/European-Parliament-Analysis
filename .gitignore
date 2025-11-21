@@ -3,3 +3,12 @@ inspect_topics.ipynb
 *.gexf
 *.csv.gz
 results/
+figs/
+similarity_matrices/
+topic_networks_*/
+policy_networks_*/
+gexf_files/
+__pycache__/
+*.pyc
+*.gexf
+
