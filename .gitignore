@@ -11,4 +11,5 @@ gexf_files/
 __pycache__/
 *.pyc
 *.gexf
-
+modularity_analysis/results/
+modularity_analysis/__pycache__/
