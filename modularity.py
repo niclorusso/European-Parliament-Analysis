@@ -189,8 +189,19 @@ def graph_from_similarity(A, meps):
     return G
 
 
-def compute_qmax(G, R=10, gamma=1.0, random_state=42):
-    """Compute Qmax as mean over R runs."""
+def compute_qmax(G, R=10, gamma=1.0, random_state=42, return_max=False):
+    """Compute Qmax over R runs.
+    
+    Args:
+        G: NetworkX graph
+        R: Number of runs
+        gamma: Resolution parameter
+        random_state: Random seed
+        return_max: If True, return max Qmax across runs; if False, return mean (default: False)
+    
+    Returns:
+        (Q_value, Q_std) where Q_value is max or mean depending on return_max
+    """
     Q_values = []
     for r in range(R):
         print("Run", r)
@@ -199,7 +210,11 @@ def compute_qmax(G, R=10, gamma=1.0, random_state=42):
         )
         Q = community_louvain.modularity(partition, G, weight='weight')
         Q_values.append(Q)
-    return np.mean(Q_values), np.std(Q_values)
+    
+    if return_max:
+        return np.max(Q_values), np.std(Q_values)
+    else:
+        return np.mean(Q_values), np.std(Q_values)
 
 
 def compute_partition_modularity(G, partition_dict, weight='weight'):

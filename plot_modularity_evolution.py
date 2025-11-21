@@ -233,12 +233,16 @@ def plot_modularity_evolution_per_topic(df: pd.DataFrame, topic_slug: str):
     return out_path
 
 
-def compute_global_modularity_per_ep():
-    """Compute modularity from the entire (global) MEP network for each EP."""
+def compute_global_modularity_per_ep(ep_list=None):
+    """Compute modularity from the entire (global) MEP network for each EP.
+    
+    Args:
+        ep_list: Optional list of EP numbers to process. If None, processes all EPs in EP_RANGE.
+    """
     from analyze_topic_evolution import (
         SCHEMA,
         HAS_MODULARITY_MODULE,
-        compute_comprehensive_modularity,
+        compute_comprehensive_modularity_with_subsampling,
         similarity_matrix,
         graph_from_similarity,
         extract_metadata_from_mep_graph,
@@ -255,7 +259,10 @@ def compute_global_modularity_per_ep():
     
     results = []
     
-    for ep in EP_RANGE:
+    # Use provided EP list or default to EP_RANGE
+    eps_to_process = ep_list if ep_list is not None else EP_RANGE
+    
+    for ep in eps_to_process:
         print(f"  Computing global modularity for EP{ep}...")
         vote_matrix_path = Path(f"data/all_votes_main_EP{ep}.csv")
         votes_used = None
@@ -284,16 +291,13 @@ def compute_global_modularity_per_ep():
                             f"    Loaded global network: {G_global.number_of_nodes()} nodes, {G_global.number_of_edges()} edges"
                         )
                         df_meta = extract_metadata_from_mep_graph(G_global)
-                        downsampled_flag = False
-                        if G_global.number_of_nodes() > MAX_NODES:
-                            nodes = list(G_global.nodes())
-                            sampled = RNG.sample(nodes, MAX_NODES)
-                            G_global = G_global.subgraph(sampled).copy()
-                            df_meta = df_meta[df_meta["member.id"].astype(str).isin(sampled)].copy()
-                            print(f"    Subsampled: {len(nodes)}→{MAX_NODES} nodes")
-                            downsampled_flag = True
+                        downsampled_flag = G_global.number_of_nodes() > MAX_NODES
+                        if downsampled_flag:
+                            print(f"    Network has {G_global.number_of_nodes()} nodes, will subsample to {MAX_NODES} nodes")
                         
-                        mod_metrics = compute_comprehensive_modularity(G_global, df_meta, ep)
+                        mod_metrics = compute_comprehensive_modularity_with_subsampling(
+                            G_global, df_meta, ep, needs_subsampling=downsampled_flag
+                        )
                         mod_metrics["ep"] = ep
                         mod_metrics["votes_used"] = votes_used
                         mod_metrics["downsampled"] = downsampled_flag
@@ -341,16 +345,13 @@ def compute_global_modularity_per_ep():
             if G_global.number_of_nodes() < 10:
                 continue
             
-            downsampled_flag = False
-            if G_global.number_of_nodes() > MAX_NODES:
-                nodes = list(G_global.nodes())
-                sampled = RNG.sample(nodes, MAX_NODES)
-                G_global = G_global.subgraph(sampled).copy()
-                df_meta = df_meta[df_meta[schema["member_id"]].astype(str).isin(sampled)].copy()
-                print(f"    Subsampled: {len(nodes)}→{MAX_NODES} nodes")
-                downsampled_flag = True
+            downsampled_flag = G_global.number_of_nodes() > MAX_NODES
+            if downsampled_flag:
+                print(f"    Network has {G_global.number_of_nodes()} nodes, will subsample to {MAX_NODES} nodes")
             
-            mod_metrics = compute_comprehensive_modularity(G_global, df_meta, ep)
+            mod_metrics = compute_comprehensive_modularity_with_subsampling(
+                G_global, df_meta, ep, needs_subsampling=downsampled_flag
+            )
             mod_metrics["ep"] = ep
             mod_metrics["votes_used"] = votes_used
             mod_metrics["downsampled"] = downsampled_flag
@@ -415,7 +416,13 @@ def plot_modularity_aggregated(df: pd.DataFrame):
             print("⚠️  No modularity data in global networks.")
             return
         aggregated = global_df.set_index("ep")[available_cols]
-        qmax_std_series = global_df.set_index("ep")["qmax_std"] if "qmax_std" in global_df.columns else None
+        # Prefer subsample_std if available (from multiple subsamples), otherwise use qmax_std
+        if "qmax_subsample_std" in global_df.columns:
+            qmax_std_series = global_df.set_index("ep")["qmax_subsample_std"]
+        elif "qmax_std" in global_df.columns:
+            qmax_std_series = global_df.set_index("ep")["qmax_std"]
+        else:
+            qmax_std_series = None
         aux_global = global_df.set_index("ep")
         votes_info = aux_global.get("votes_used")
         downsample_info = aux_global.get("downsampled")
@@ -555,15 +562,18 @@ def plot_modularity_comparison_heatmap(df: pd.DataFrame):
     
     im = ax.imshow(pivot_df.values, aspect="auto", cmap="YlOrRd", interpolation="nearest")
     
+    # Get actual EP columns that have data
+    ep_columns = pivot_df.columns.tolist()
+    
     # Set ticks
-    ax.set_xticks(np.arange(len(EP_RANGE)))
-    ax.set_xticklabels([f"EP{ep}" for ep in EP_RANGE])
+    ax.set_xticks(np.arange(len(ep_columns)))
+    ax.set_xticklabels([f"EP{int(ep)}" for ep in ep_columns])
     ax.set_yticks(np.arange(len(pivot_df)))
     ax.set_yticklabels(pivot_df.index, fontsize=9)
     
     # Add text annotations
     for i in range(len(pivot_df)):
-        for j in range(len(EP_RANGE)):
+        for j in range(len(ep_columns)):
             val = pivot_df.iloc[i, j]
             if pd.notna(val):
                 text = ax.text(j, i, f"{val:.3f}", ha="center", va="center",

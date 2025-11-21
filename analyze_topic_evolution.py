@@ -48,6 +48,7 @@ BOOTSTRAP_THRESHOLD = 30
 BOOTSTRAP_ITERATIONS = 100
 BOOTSTRAP_MIN_UNIQUE_NODES = 10
 QMAX_RUNS = 20  # Number of runs for Qmax computation (like modularity.ipynb)
+SUBSAMPLE_ITERATIONS = 10  # Number of subsamples for large networks
 RNG = random.Random(42)
 
 EP_RANGE = range(6, 11)
@@ -318,8 +319,66 @@ def build_mep_network_from_votes(df_votes: pd.DataFrame, vote_cols: List[str], e
         return None, None
 
 
-def compute_comprehensive_modularity(G_mep: nx.Graph, df_meta: pd.DataFrame, ep: int) -> Dict[str, float]:
-    """Compute all modularity measures like in modularity.py."""
+def compute_comprehensive_modularity_with_subsampling(G_mep_full: nx.Graph, df_meta_full: pd.DataFrame, ep: int, needs_subsampling: bool) -> Dict[str, float]:
+    """Compute modularity with multiple subsamples if network needs subsampling, return max and std."""
+    if not HAS_MODULARITY_MODULE or G_mep_full.number_of_edges() == 0:
+        return {}
+    
+    # If network needs subsampling, compute modularity multiple times with different subsamples
+    if needs_subsampling and G_mep_full.number_of_nodes() > MAX_NODES:
+        print(f"    Computing modularity with {SUBSAMPLE_ITERATIONS} different subsamples...")
+        print(f"    For each subsample, running Louvain {QMAX_RUNS} times and taking the maximum Qmax...")
+        all_metrics = []
+        nodes_full = list(G_mep_full.nodes())
+        
+        for i in range(SUBSAMPLE_ITERATIONS):
+            # Create a different random subsample each time
+            rng_sample = random.Random(42 + i)
+            sampled_nodes = rng_sample.sample(nodes_full, MAX_NODES)
+            G_subsample = G_mep_full.subgraph(sampled_nodes).copy()
+            df_meta_subsample = df_meta_full[df_meta_full["member.id"].astype(str).isin(sampled_nodes)].copy()
+            
+            # Compute modularity for this subsample
+            # For each subsample, run Louvain 20 times and take the maximum Qmax
+            metrics = compute_comprehensive_modularity(G_subsample, df_meta_subsample, ep, random_seed=42, use_max_qmax=True)
+            if metrics:
+                all_metrics.append(metrics)
+        
+        if not all_metrics:
+            return {}
+        
+        # Aggregate: take max for each metric, compute std
+        result = {}
+        metric_names = set()
+        for m in all_metrics:
+            metric_names.update(m.keys())
+        
+        for metric_name in metric_names:
+            values = [m.get(metric_name, math.nan) for m in all_metrics if metric_name in m]
+            values = [v for v in values if not (isinstance(v, float) and math.isnan(v))]
+            if values:
+                result[metric_name] = max(values)  # Take maximum
+                if len(values) > 1:
+                    result[f"{metric_name}_subsample_std"] = float(np.std(values))
+                else:
+                    result[f"{metric_name}_subsample_std"] = 0.0
+        
+        return result
+    else:
+        # Not subsampled, compute normally
+        return compute_comprehensive_modularity(G_mep_full, df_meta_full, ep)
+
+
+def compute_comprehensive_modularity(G_mep: nx.Graph, df_meta: pd.DataFrame, ep: int, random_seed: int = 42, use_max_qmax: bool = False) -> Dict[str, float]:
+    """Compute all modularity measures like in modularity.py.
+    
+    Args:
+        G_mep: NetworkX graph
+        df_meta: Metadata dataframe
+        ep: EP number
+        random_seed: Random seed
+        use_max_qmax: If True, take max Qmax across runs; if False, take mean (default: False)
+    """
     metrics: Dict[str, float] = {}
     
     if not HAS_MODULARITY_MODULE or G_mep.number_of_edges() == 0:
@@ -327,17 +386,16 @@ def compute_comprehensive_modularity(G_mep: nx.Graph, df_meta: pd.DataFrame, ep:
     
     try:
         # Qmax with multiple runs
-        print(f"    Computing Qmax ({QMAX_RUNS} runs, this may take a moment)...")
         # Temporarily suppress print statements from compute_qmax
         import sys
         from io import StringIO
         old_stdout = sys.stdout
         sys.stdout = StringIO()
         try:
-            Qmax_mean, Qmax_std = compute_qmax(G_mep, R=QMAX_RUNS, gamma=1.0, random_state=42)
+            Qmax_value, Qmax_std = compute_qmax(G_mep, R=QMAX_RUNS, gamma=1.0, random_state=random_seed, return_max=use_max_qmax)
         finally:
             sys.stdout = old_stdout
-        metrics["qmax"] = Qmax_mean
+        metrics["qmax"] = Qmax_value
         metrics["qmax_std"] = Qmax_std
         
         # Party modularity
@@ -349,7 +407,7 @@ def compute_comprehensive_modularity(G_mep: nx.Graph, df_meta: pd.DataFrame, ep:
             }
             if party_partition:
                 metrics["qparty"] = compute_partition_modularity(G_mep, party_partition)
-                metrics["qparty_qmax_ratio"] = metrics["qparty"] / Qmax_mean if Qmax_mean > 0 else math.nan
+                metrics["qparty_qmax_ratio"] = metrics["qparty"] / Qmax_value if Qmax_value > 0 else math.nan
         
         # Country modularity
         country_cols = ["member.country.label", "member.country.code"]
@@ -362,31 +420,31 @@ def compute_comprehensive_modularity(G_mep: nx.Graph, df_meta: pd.DataFrame, ep:
             }
             if country_partition:
                 metrics["qcountry"] = compute_partition_modularity(G_mep, country_partition)
-                metrics["qcountry_qmax_ratio"] = metrics["qcountry"] / Qmax_mean if Qmax_mean > 0 else math.nan
+                metrics["qcountry_qmax_ratio"] = metrics["qcountry"] / Qmax_value if Qmax_value > 0 else math.nan
         
         # Left-Right modularity
         lr_partition = create_left_right_partition(df_meta)
         if lr_partition:
             metrics["q_left_right"] = compute_partition_modularity(G_mep, lr_partition)
-            metrics["q_left_right_qmax_ratio"] = metrics["q_left_right"] / Qmax_mean if Qmax_mean > 0 else math.nan
+            metrics["q_left_right_qmax_ratio"] = metrics["q_left_right"] / Qmax_value if Qmax_value > 0 else math.nan
         
         # Left-Center-Right modularity
         lcr_partition = create_left_center_right_partition(df_meta)
         if lcr_partition:
             metrics["q_left_center_right"] = compute_partition_modularity(G_mep, lcr_partition)
-            metrics["q_left_center_right_qmax_ratio"] = metrics["q_left_center_right"] / Qmax_mean if Qmax_mean > 0 else math.nan
+            metrics["q_left_center_right_qmax_ratio"] = metrics["q_left_center_right"] / Qmax_value if Qmax_value > 0 else math.nan
         
         # Extreme-Centrist modularity
         ec_partition = create_extreme_centrist_partition(df_meta)
         if ec_partition:
             metrics["q_extreme_centrist"] = compute_partition_modularity(G_mep, ec_partition)
-            metrics["q_extreme_centrist_qmax_ratio"] = metrics["q_extreme_centrist"] / Qmax_mean if Qmax_mean > 0 else math.nan
+            metrics["q_extreme_centrist_qmax_ratio"] = metrics["q_extreme_centrist"] / Qmax_value if Qmax_value > 0 else math.nan
 
         # Majority vs Opposition modularity
         coalition_partition = create_coalition_partition(df_meta, ep)
         if coalition_partition:
             metrics["q_majority_opposition"] = compute_partition_modularity(G_mep, coalition_partition)
-            metrics["q_majority_opposition_qmax_ratio"] = metrics["q_majority_opposition"] / Qmax_mean if Qmax_mean > 0 else math.nan
+            metrics["q_majority_opposition_qmax_ratio"] = metrics["q_majority_opposition"] / Qmax_value if Qmax_value > 0 else math.nan
         
     except Exception as e:
         print(f"    ⚠️  Error computing modularity: {e}")
@@ -455,6 +513,21 @@ def generate_modularity_plots(df: pd.DataFrame):
         print("  ⚠️  No modularity data found, skipping plots.")
         return
     
+    # Try to load vote counts from comprehensive metrics file
+    vote_counts = {}
+    metrics_path = OUTPUT_DIR / "topic_network_metrics.csv"
+    if metrics_path.exists():
+        try:
+            metrics_df = pd.read_csv(metrics_path)
+            if "votes_used" in metrics_df.columns and "topic_slug" in metrics_df.columns and "ep" in metrics_df.columns:
+                for _, row in metrics_df.iterrows():
+                    if pd.notna(row.get("votes_used")):
+                        key = (str(row["topic_slug"]), int(row["ep"]))
+                        vote_counts[key] = int(row["votes_used"])
+                print(f"  Loaded vote counts for {len(vote_counts)} topic-EP combinations")
+        except Exception as e:
+            print(f"  ⚠️  Could not load vote counts: {e}")
+    
     for ep in EP_RANGE:
         ep_df = df[df["ep"] == ep].copy()
         if ep_df.empty:
@@ -472,16 +545,27 @@ def generate_modularity_plots(df: pd.DataFrame):
         if "qmax" in ep_df.columns:
             ep_df = ep_df.sort_values("qmax", ascending=False, na_position='last')
         
-        # Prepare data for plotting
-        topics = ep_df["topic_label"].tolist()
+        # Prepare data for plotting with vote counts in brackets
+        topics = []
+        for _, row in ep_df.iterrows():
+            topic_label = row["topic_label"]
+            topic_slug = row.get("topic_slug", "")
+            # Try to get vote count
+            vote_count = vote_counts.get((str(topic_slug), ep), None)
+            if vote_count is not None:
+                topics.append(f"{topic_label} ({vote_count})")
+            else:
+                topics.append(topic_label)
         n_topics = len(topics)
         
         if n_topics == 0:
             continue
         
-        # Create bar plot
-        fig, ax = plt.subplots(figsize=(max(12, n_topics * 0.6), 6))
-        x = np.arange(n_topics)
+        # Create bar plot with more space between topics
+        fig, ax = plt.subplots(figsize=(max(14, n_topics * 0.8), 6))
+        # Add spacing between topic groups
+        spacing = 1.2  # Space multiplier between topics
+        x = np.arange(n_topics) * spacing
         width = 0.15
         
         # Colors matching modularity.py
@@ -491,22 +575,17 @@ def generate_modularity_plots(df: pd.DataFrame):
             "qparty": "#d73027",
             "q_left_right": "#91bfdb",
             "qcountry": "#4575b4",
+            "q_majority_opposition": "#e0f3f8",
+            "q_left_center_right": "#74add1",
         }
         
-        # Collect which measures we have
+        # Collect which measures we have (in desired order: majority, left-center-right, left-right, extreme, party, country)
         available_measures = []
-        if "qmax" in ep_df.columns and ep_df["qmax"].notna().any():
-            available_measures.append("qmax")
-        if "q_extreme_centrist" in ep_df.columns and ep_df["q_extreme_centrist"].notna().any():
-            available_measures.append("q_extreme_centrist")
-        if "qparty" in ep_df.columns and ep_df["qparty"].notna().any():
-            available_measures.append("qparty")
-        if "q_left_right" in ep_df.columns and ep_df["q_left_right"].notna().any():
-            available_measures.append("q_left_right")
-        if "qcountry" in ep_df.columns and ep_df["qcountry"].notna().any():
-            available_measures.append("qcountry")
-        if "q_majority_opposition" in ep_df.columns and ep_df["q_majority_opposition"].notna().any():
-            available_measures.append("q_majority_opposition")
+        measure_order = ["qmax", "q_majority_opposition", "q_left_center_right", "q_left_right", 
+                        "q_extreme_centrist", "qparty", "qcountry"]
+        for measure in measure_order:
+            if measure in ep_df.columns and ep_df[measure].notna().any():
+                available_measures.append(measure)
         
         n_measures = len(available_measures)
         if n_measures == 0:
@@ -527,6 +606,7 @@ def generate_modularity_plots(df: pd.DataFrame):
                 "q_left_right": "Left–Right",
                 "qcountry": "Country",
                 "q_majority_opposition": "Majority vs Opposition",
+                "q_left_center_right": "Left–Center–Right",
             }
             ax.bar(x + offset, values, width, color=colors[measure], label=label_map[measure], alpha=0.9)
         
@@ -564,7 +644,7 @@ def normalize_topic_filter(topic_filters: Iterable[str]) -> set[str]:
     return cleaned
 
 
-def analyze_topics(topic_filters: Iterable[str] | None = None):
+def analyze_topics(topic_filters: Iterable[str] | None = None, ep_filter: int | None = None):
     records: List[Dict[str, float]] = []
 
     print(f"Scanning topic networks under {BASE_DIR.resolve()}...")
@@ -572,8 +652,14 @@ def analyze_topics(topic_filters: Iterable[str] | None = None):
     allowed_topics = normalize_topic_filter(topic_filters or [])
     if allowed_topics:
         print(f"Topic filter enabled: {sorted(allowed_topics)}")
+    
+    if ep_filter is not None:
+        print(f"EP filter enabled: EP{ep_filter}")
+        ep_range = [ep_filter]
+    else:
+        ep_range = list(EP_RANGE)
 
-    for ep in EP_RANGE:
+    for ep in ep_range:
         ep_dir = BASE_DIR / f"EP{ep}"
         if not ep_dir.exists():
             print(f"⚠️  EP{ep} directory not found, skipping.")
@@ -618,23 +704,28 @@ def analyze_topics(topic_filters: Iterable[str] | None = None):
             mep_gexf_path = find_mep_network_path(ep, topic_slug)
             if mep_gexf_path and mep_gexf_path.exists():
                 try:
-                    G_mep = nx.read_gexf(mep_gexf_path)
-                    print(f"    Loaded MEP network: {mep_gexf_path.name} ({G_mep.number_of_nodes()} nodes)")
+                    G_mep_full = nx.read_gexf(mep_gexf_path)
+                    print(f"    Loaded MEP network: {mep_gexf_path.name} ({G_mep_full.number_of_nodes()} nodes)")
                     
                     # Extract metadata from node attributes
-                    df_meta = extract_metadata_from_mep_graph(G_mep)
+                    df_meta_full = extract_metadata_from_mep_graph(G_mep_full)
                     
-                    # Subsample if needed (for performance with Qmax 100 runs)
-                    if G_mep.number_of_nodes() > MAX_NODES:
-                        nodes = list(G_mep.nodes())
-                        sampled = RNG.sample(nodes, MAX_NODES)
-                        G_mep = G_mep.subgraph(sampled).copy()
-                        df_meta = df_meta[df_meta["member.id"].astype(str).isin(sampled)].copy()
-                        print(f"    Subsampled MEP network: {len(nodes)}→{MAX_NODES} nodes")
+                    # Check if we need to subsample
+                    needs_subsampling = G_mep_full.number_of_nodes() > MAX_NODES
+                    if needs_subsampling:
+                        print(f"    Network has {G_mep_full.number_of_nodes()} nodes, will subsample to {MAX_NODES} nodes")
                     
-                    mod_metrics = compute_comprehensive_modularity(G_mep, df_meta, ep)
+                    # Compute modularity (with multiple subsamples if needed)
+                    mod_metrics = compute_comprehensive_modularity_with_subsampling(
+                        G_mep_full, df_meta_full, ep, needs_subsampling=needs_subsampling
+                    )
                     metrics.update(mod_metrics)
-                    print(f"    Modularity computed: Qmax={mod_metrics.get('qmax', math.nan):.4f}")
+                    qmax_val = mod_metrics.get('qmax', math.nan)
+                    qmax_std = mod_metrics.get('qmax_subsample_std', mod_metrics.get('qmax_std', math.nan))
+                    if needs_subsampling and not math.isnan(qmax_std):
+                        print(f"    Modularity computed (max across {SUBSAMPLE_ITERATIONS} subsamples): Qmax={qmax_val:.4f} ± {qmax_std:.4f}")
+                    else:
+                        print(f"    Modularity computed: Qmax={qmax_val:.4f}")
                 except Exception as exc:
                     print(f"    ⚠️  Error loading MEP network: {exc}")
             else:
@@ -713,9 +804,15 @@ def parse_args():
         dest="topics",
         help="Topic slug or label to analyze (can repeat). Defaults to all topics.",
     )
+    parser.add_argument(
+        "--ep",
+        type=int,
+        choices=[6, 7, 8, 9, 10],
+        help="Filter by specific EP legislature (6-10). Defaults to all EPs.",
+    )
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
-    analyze_topics(args.topics)
+    analyze_topics(args.topics, ep_filter=args.ep)

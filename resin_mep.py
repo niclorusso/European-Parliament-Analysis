@@ -465,16 +465,6 @@ def process_legislature(ep_number):
     
     summaries = []
     
-    # Global network (all votes) - only if topic analysis is OFF
-    if not ENABLE_TOPIC_ANALYSIS:
-        print(f"[EP{ep_number}] Processing global network...")
-        result = process_mep_network(
-            ep_number, vote_cols, df, mep_ids,
-            "global", OUTFOLDER, today
-        )
-        if result:
-            summaries.append(result)
-    
     # Per-topic networks - only if topic analysis is ON
     if ENABLE_TOPIC_ANALYSIS:
         print(f"[EP{ep_number}] Processing per-topic networks...")
@@ -511,6 +501,15 @@ def process_legislature(ep_number):
                 print(f"[EP{ep_number}] Could not detect topic columns, skipping topic analysis.")
         else:
             print(f"[EP{ep_number}] No topic metadata found, skipping topic analysis.")
+    else:
+        # Global network (all votes) - only if topic analysis is OFF
+        print(f"[EP{ep_number}] Processing global network...")
+        result = process_mep_network(
+            ep_number, vote_cols, df, mep_ids,
+            "global", OUTFOLDER, today
+        )
+        if result:
+            summaries.append(result)
     
     # Save summary
     if summaries:
